@@ -22,12 +22,45 @@ from typing import Optional
 
 import numpy as np
 
+__all__ = [
+    "GENESIS_HASH",
+    "SAMPLE_GRID",
+    "compute_frame_hash",
+    "extract_frame_properties",
+    "compute_chain_hash",
+    "build_fingerprint",
+]
+
 # Sentinel hash used as ``prev_chain_hash`` for the very first frame.
 GENESIS_HASH = "sha256:" + "0" * 64
 
 # Grid dimension used when sampling the next frame for binding properties.
 # A SAMPLE_GRID x SAMPLE_GRID lattice of pixels is extracted (16 by default).
 SAMPLE_GRID = 4
+
+# Pre-compute sample-point row/column indices so they are not recomputed
+# on every frame.  Updated lazily when SAMPLE_GRID changes (not expected in
+# normal usage, but makes the code correct if someone patches SAMPLE_GRID).
+_sample_rows: Optional[np.ndarray] = None
+_sample_cols: Optional[np.ndarray] = None
+_sample_grid_cached: int = 0
+
+
+def _get_sample_indices(height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return (row_indices, col_indices) for the SAMPLE_GRID lattice."""
+    global _sample_rows, _sample_cols, _sample_grid_cached
+    if _sample_grid_cached != SAMPLE_GRID:
+        g = SAMPLE_GRID
+        frac = np.arange(g) + 0.5
+        _sample_rows = (frac / g * height).astype(int)
+        _sample_cols = (frac / g * width).astype(int)
+        _sample_grid_cached = g
+    # Scale to current frame dimensions each call (cheap)
+    g = SAMPLE_GRID
+    frac = np.arange(g) + 0.5
+    rows = (frac / g * height).astype(int)
+    cols = (frac / g * width).astype(int)
+    return rows, cols
 
 
 def compute_frame_hash(frame_bytes: bytes) -> str:
@@ -57,13 +90,13 @@ def extract_frame_properties(frame_bytes: bytes, width: int, height: int) -> dic
     means = arr.mean(axis=(0, 1))
     stds = arr.std(axis=(0, 1))
 
-    sample_pixels = []
-    for row in range(SAMPLE_GRID):
-        for col in range(SAMPLE_GRID):
-            y = int((row + 0.5) * height / SAMPLE_GRID)
-            x = int((col + 0.5) * width / SAMPLE_GRID)
-            r, g, b = arr[y, x]
-            sample_pixels.append([int(r), int(g), int(b)])
+    # Vectorised pixel sampling: build index grids and gather in one shot
+    # instead of a Python-level nested loop.
+    rows, cols = _get_sample_indices(height, width)
+    # rows/cols are 1-D; mesh them to get all (row, col) pairs
+    row_idx, col_idx = np.meshgrid(rows, cols, indexing="ij")
+    sampled = arr[row_idx.ravel(), col_idx.ravel()]  # shape (SAMPLE_GRID**2, 3)
+    sample_pixels = sampled.tolist()
 
     return {
         "mean_r": round(float(means[0]), 4),

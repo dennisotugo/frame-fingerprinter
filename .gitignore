@@ -27,3 +27,7 @@ Thumbs.db
 
 # Project-specific
 *.fpchain
+
+# Data directory (keep the dir, ignore its contents)
+data/*
+!data/.gitkeep

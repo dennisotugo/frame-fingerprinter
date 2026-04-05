@@ -11,14 +11,35 @@ Uses the ``python-gnupg`` library (a thin subprocess wrapper around the
 
 import os
 import tempfile
+import threading
 from typing import Optional
 
 import gnupg
 
+__all__ = [
+    "sign_chain_hash",
+    "verify_signature",
+    "generate_test_key",
+]
+
+# ---------------------------------------------------------------------------
+# GPG instance cache
+# ---------------------------------------------------------------------------
+# Creating a gnupg.GPG() object is inexpensive, but it does stat the gpg
+# home directory.  More importantly, caching avoids re-reading agent sockets
+# on every call when a large chain is being built or verified.  Access is
+# protected by a lock so the cache is safe in multi-threaded use.
+
+_gpg_cache: dict[Optional[str], gnupg.GPG] = {}
+_gpg_cache_lock = threading.Lock()
+
 
 def _get_gpg(gpg_home: Optional[str] = None) -> gnupg.GPG:
-    """Return a :class:`gnupg.GPG` instance, optionally using *gpg_home*."""
-    return gnupg.GPG(gnupghome=gpg_home)
+    """Return a cached :class:`gnupg.GPG` instance for *gpg_home*."""
+    with _gpg_cache_lock:
+        if gpg_home not in _gpg_cache:
+            _gpg_cache[gpg_home] = gnupg.GPG(gnupghome=gpg_home)
+        return _gpg_cache[gpg_home]
 
 
 def sign_chain_hash(

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="frame-fingerprinter",
-    version="0.1.0",
+    version="0.2.0",
     description=(
         "Frame-by-frame cryptographic verifier for video – "
         "designed for dashcams and recording devices."

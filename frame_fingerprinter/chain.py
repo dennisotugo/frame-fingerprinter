@@ -17,9 +17,10 @@ This module provides:
 """
 
 import json
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import IO, Iterator, Optional
 
 from .fingerprint import (
     GENESIS_HASH,
@@ -29,6 +30,13 @@ from .fingerprint import (
     extract_frame_properties,
 )
 from .signer import sign_chain_hash, verify_signature
+
+__all__ = [
+    "ChainWriter",
+    "ChainVerifier",
+    "load_chain",
+    "FPCHAIN_VERSION",
+]
 
 FPCHAIN_VERSION = 1
 
@@ -79,8 +87,8 @@ class ChainWriter:
 
         self._frame_number = 0
         self._prev_chain_hash = GENESIS_HASH
-        self._pending: Optional[tuple] = None  # (frame_bytes, timestamp)
-        self._file = None
+        self._pending: Optional[tuple[bytes, str]] = None  # (frame_bytes, timestamp)
+        self._file: Optional[IO[str]] = None
 
     def __enter__(self) -> "ChainWriter":
         self._file = open(self.output_path, "w", encoding="utf-8")
@@ -96,14 +104,19 @@ class ChainWriter:
         self._file.flush()
         return self
 
-    def __exit__(self, *_) -> None:
-        if self._pending is not None:
-            frame_bytes, timestamp = self._pending
-            self._write_fingerprint(frame_bytes, timestamp, next_frame_bytes=None)
-            self._pending = None
-        if self._file:
-            self._file.close()
-            self._file = None
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            if exc_type is None and self._pending is not None:
+                # Normal exit: flush the last pending frame (no next frame).
+                frame_bytes, timestamp = self._pending
+                self._write_fingerprint(frame_bytes, timestamp, next_frame_bytes=None)
+                self._pending = None
+        finally:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
+        # Return False so that any exception is propagated to the caller.
+        return False
 
     def add_frame(self, frame_bytes: bytes, timestamp: Optional[str] = None) -> None:
         """
@@ -127,6 +140,7 @@ class ChainWriter:
         timestamp: str,
         next_frame_bytes: Optional[bytes],
     ) -> None:
+        assert self._file is not None, "ChainWriter must be used as a context manager"
         fp = build_fingerprint(
             frame_number=self._frame_number,
             timestamp=timestamp,
@@ -151,7 +165,7 @@ class ChainWriter:
         self._frame_number += 1
 
 
-def load_chain(chain_path: str) -> tuple:
+def load_chain(chain_path: str) -> tuple[dict, list[dict]]:
     """
     Load a ``.fpchain`` file.
 
@@ -165,8 +179,8 @@ def load_chain(chain_path: str) -> tuple:
     Raises:
         :exc:`ValueError` if no header line is found.
     """
-    records = []
-    header = None
+    records: list[dict] = []
+    header: Optional[dict] = None
     with open(chain_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -183,12 +197,43 @@ def load_chain(chain_path: str) -> tuple:
     return header, records
 
 
+def _lookahead_pairs(
+    it: Iterator[bytes],
+) -> Iterator[tuple[bytes, Optional[bytes]]]:
+    """
+    Yield ``(current, next_or_None)`` pairs from *it*.
+
+    Holds at most two frames in memory at any given time, keeping verification
+    memory-efficient regardless of video length.
+    """
+    buf: deque[bytes] = deque(maxlen=2)
+    # Pre-fill up to two frames.
+    for _ in range(2):
+        try:
+            buf.append(next(it))
+        except StopIteration:
+            break
+    while buf:
+        current = buf[0]
+        nxt: Optional[bytes] = buf[1] if len(buf) > 1 else None
+        yield current, nxt
+        buf.popleft()
+        # Refill the look-ahead slot.
+        if nxt is not None:
+            try:
+                buf.append(next(it))
+            except StopIteration:
+                pass
+
+
 class ChainVerifier:
     """
     Verify the integrity of a ``.fpchain`` file.
 
     Optionally cross-checks each frame's hash against actual video frame data
-    supplied as a byte iterator.
+    supplied as a byte iterator.  Verification is **streaming**: only two raw
+    frames are held in memory at any time, making it safe to use against
+    arbitrarily large recordings.
 
     Args:
         gpg_home: Custom GPG home directory (``None`` for default ``~/.gnupg``).
@@ -224,6 +269,7 @@ class ChainVerifier:
             chain_path:  Path to the ``.fpchain`` file.
             frame_iter:  Iterator yielding raw RGB24 frame bytes in display
                          order.  When provided, checks 4 and 5 are also run.
+                         Only two frames are held in memory at a time.
             verbose:     Print per-frame status to stdout.
 
         Returns:
@@ -237,10 +283,13 @@ class ChainVerifier:
         header, records = load_chain(chain_path)
         errors: list[str] = []
         prev_chain_hash = GENESIS_HASH
+        total = len(records)
 
-        frame_data_list: list[bytes] = []
+        # Build a streaming look-ahead iterator when frame data is supplied.
+        # This avoids loading the entire video into RAM.
+        frame_pairs: Optional[Iterator[tuple[bytes, Optional[bytes]]]] = None
         if frame_iter is not None:
-            frame_data_list = list(frame_iter)
+            frame_pairs = _lookahead_pairs(frame_iter)
 
         for i, record in enumerate(records):
             frame_num = record.get("frame_number", i)
@@ -281,24 +330,25 @@ class ChainVerifier:
             elif verbose:
                 print(f"  {prefix}: signature OK (key: {sig_result.get('key_id')})")
 
-            # 4 & 5. Cross-check against actual video frames
-            if frame_data_list:
-                width = record["width"]
-                height = record["height"]
+            # 4 & 5. Cross-check against actual video frames (streaming)
+            if frame_pairs is not None:
+                pair = next(frame_pairs, None)
+                if pair is None:
+                    errors.append(f"{prefix}: no video frame available for verification")
+                else:
+                    actual_frame, next_frame = pair
+                    width = record["width"]
+                    height = record["height"]
 
-                if i < len(frame_data_list):
-                    actual_frame = frame_data_list[i]
                     actual_hash = compute_frame_hash(actual_frame)
                     if actual_hash != record["frame_hash"]:
-                        errors.append(
-                            f"{prefix}: frame_hash mismatch with video data"
-                        )
+                        errors.append(f"{prefix}: frame_hash mismatch with video data")
 
                     stored_next = record.get("next_frame_properties")
                     if stored_next is not None:
-                        if i + 1 < len(frame_data_list):
+                        if next_frame is not None:
                             expected_props = extract_frame_properties(
-                                frame_data_list[i + 1], width, height
+                                next_frame, width, height
                             )
                             if expected_props != stored_next:
                                 errors.append(
@@ -310,8 +360,7 @@ class ChainVerifier:
                                 f"{prefix}: next_frame_properties present but "
                                 "no next frame in video"
                             )
-                    elif i < len(records) - 1:
-                        # next_frame_properties is None but this is not the last record
+                    elif i < total - 1:
                         errors.append(
                             f"{prefix}: next_frame_properties is None but "
                             "not the last frame"
@@ -321,7 +370,7 @@ class ChainVerifier:
 
         return {
             "valid": len(errors) == 0,
-            "total_frames": len(records),
+            "total_frames": total,
             "header": header,
             "errors": errors,
         }

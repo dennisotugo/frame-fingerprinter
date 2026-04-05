@@ -56,17 +56,57 @@ The first frame uses a well-known *genesis hash* (`sha256:0000…`) as
 
 ## Installation
 
-**Requirements**
-
-- Python 3.10+
-- GnuPG 2.x (`gpg` in `PATH`)
-- FFmpeg (`ffmpeg` and `ffprobe` in `PATH`)
+### Option 1 – One-line installer (recommended for beginners)
 
 ```bash
-pip install -r requirements.txt
-# or
-pip install -e .
+# Clone, then run:
+bash install.sh
+
+# With dev dependencies (adds pytest etc.):
+bash install.sh --dev
 ```
+
+The script auto-detects your OS (Debian/Ubuntu, Fedora/RHEL, macOS with
+Homebrew) and installs `ffmpeg`, `gpg`, and the Python package.
+
+### Option 2 – pip
+
+```bash
+# Production (runtime only):
+pip install .
+
+# Development (adds pytest, Pillow):
+pip install -e ".[dev]"
+```
+
+### Option 3 – Docker (zero local dependencies)
+
+```bash
+# Build and run the fingerprinter on a file in ./data/
+docker compose run --rm fingerprint \
+    fingerprint-video -i /data/dashcam.mp4 -k YOUR_KEY_FP
+
+# Verify
+docker compose run --rm verify \
+    verify-video -c /data/dashcam.fpchain -v /data/dashcam.mp4
+```
+
+### Option 4 – make (developer workflow)
+
+```bash
+make dev    # install editable with dev deps
+make test   # run the full test suite
+make clean  # remove build artefacts
+make help   # list all targets
+```
+
+### System requirements
+
+| Dependency | Version | Install |
+|---|---|---|
+| Python | ≥ 3.10 | [python.org](https://www.python.org/downloads/) |
+| GnuPG | ≥ 2.x | `apt install gnupg` / `brew install gnupg` |
+| FFmpeg | ≥ 4.x | `apt install ffmpeg` / `brew install ffmpeg` |
 
 ### Generating a signing key
 
