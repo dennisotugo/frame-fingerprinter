@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # fingerprint – sign every frame of a video and write a .fpchain sidecar
+  #
+  # Usage:
+  #   docker compose run --rm fingerprint \
+  #       fingerprint-video -i /data/dashcam.mp4 -k YOUR_KEY_FP
+  # ---------------------------------------------------------------------------
+  fingerprint:
+    build:
+      context: .
+      target: runtime
+    volumes:
+      - ./data:/data          # place videos here; .fpchain files appear here too
+      - ~/.gnupg:/root/.gnupg # mount host GPG keyring (read-only recommended)
+    environment:
+      - GPG_PASSPHRASE        # forward from host shell: export GPG_PASSPHRASE=...
+    entrypoint: []
+    command: ["fingerprint-video", "--help"]
+
+  # ---------------------------------------------------------------------------
+  # verify – verify a .fpchain sidecar against the original video
+  #
+  # Usage:
+  #   docker compose run --rm verify \
+  #       verify-video -c /data/dashcam.fpchain -v /data/dashcam.mp4
+  # ---------------------------------------------------------------------------
+  verify:
+    build:
+      context: .
+      target: runtime
+    volumes:
+      - ./data:/data
+      - ~/.gnupg:/root/.gnupg
+    entrypoint: []
+    command: ["verify-video", "--help"]
+
+  # ---------------------------------------------------------------------------
+  # test – run the full test suite inside the dev image
+  # ---------------------------------------------------------------------------
+  test:
+    build:
+      context: .
+      target: dev
+    volumes:
+      - .:/app

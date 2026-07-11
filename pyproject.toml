@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frame-fingerprinter"
+version = "0.2.0"
+description = "Frame-by-frame cryptographic verifier for video – designed for dashcams and recording devices."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Frame Fingerprinter Contributors" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "python-gnupg>=0.5.0",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Legal Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Security :: Cryptography",
+]
+keywords = ["video", "gpg", "fingerprint", "dashcam", "authenticity", "forensics"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+fingerprint-video = "fingerprint_video:main"
+verify-video = "verify_video:main"
+
+[project.urls]
+Homepage = "https://github.com/dennisotugo/frame-fingerprinter"
+"Bug Tracker" = "https://github.com/dennisotugo/frame-fingerprinter/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
